@@ -12,15 +12,17 @@ import numpy as np
 import matplotlib.pyplot as plt
 from mpl_toolkits import mplot3d
 
-def GraphData(DATAX,DATAY,DATAZ):
+def GraphData3D(DATAX,DATAY,DATAZ):
     #print(DATAX,DATAY,DATAZ)
     fig = plt.figure()
     ax = plt.axes(projection = '3d')
     ax.scatter3D(DATAX,DATAY,DATAZ, c = DATAZ, cmap = 'Greens')
     plt.show()
+    #plt.scatter(DATAX,DATAY, c = DATAZ, marker = '.')
+    #plt.show()
 
 def senddatatinyg(data): #sending anything to the motor controller
-    if port != None: #checks if there is an open port 
+    if port != None: #checks if there is an open port
         port.write((data + "\n").encode('utf-8')) #sends data message that the tinyg can read
         time.sleep(0.2)
 def getdatatinyg(): #recieveing data from tinyg
@@ -51,7 +53,7 @@ def DAC_COMM(val,Port):
     elif Port == 1 and (3276 < val < 62258):
         commandwrite = 0b00000001
         commandupdate = 0b00010001
-    elif Port == 2 and (3276 < val < 32765):
+    elif Port == 2 and (3276 < val < 32710):
         commandwrite = 0b00000010
         commandupdate = 0b00010010
     elif Port == 3 and (3276 < val < 62258):
@@ -127,8 +129,6 @@ def ADC_COMM_CANT(Channel): #Commuication with 0V - 5V inputs from ADC returns i
     #Speed at which the Master(Pi) communicates
 
     spi.mode = 0 #Clock Polarity and Phase
-    GPIO.setmode(GPIO.BCM) #Setting CE0 as Output (May not be neccesary but oh well)
-    GPIO.setup(7,GPIO.OUT)
     #choosing which MUX input to read (from 0-5V) to change edit bits 5 and 6 (look at data sheet for more info DC682A)
     if Channel == 0:
         MUX = 0b10001000
@@ -150,8 +150,8 @@ def ADC_COMM_CANT(Channel): #Commuication with 0V - 5V inputs from ADC returns i
     #GPIO.output(7,0)
     #time.sleep(2)
     #Recieving 1011 values from ADC and finding the mean to help mitigate error
-    VCant = np.zeros(1011)
-    i = 1010
+    VCant = np.zeros(1001)
+    i = 1000
     while i > 0:
         ADC_Output = spi.xfer([MUX,MUX])
         LowByte = ADC_Output[1]
@@ -207,24 +207,14 @@ def PID(Reading, DiffOld,PastI,setpoint):
     try:
         #time.sleep(0.1)
         delta_t = 0.1 #Time inbetween steps in the pid
-        Pconst = 10 #constants that need to be developed
-        Iconst = 0.1
+        Pconst = 350 #constants that need to be developed
+        Iconst = 0
         Dconst = 10
         Diff = setpoint - Reading
-        print("Cant Voltage")
-        print(Reading)
         P = Pconst * Diff #proportional component
-        print("P")
-        print (P)
         I = PastI + Iconst*Diff*delta_t #Integral component
-        print("I")
-        print(I)
         D = -(Dconst * (Diff - DiffOld))/(delta_t) #Differential component
-        print("D")
-        print(D)
-
         Output = P + I + D
-        #print(Output)
         #print(Diff)
         return Output,Diff,I
     except KeyboardInterrupt:
@@ -232,12 +222,14 @@ def PID(Reading, DiffOld,PastI,setpoint):
 #Constants are defined here
 retractedZ = 300
 Base0 = 32700
-Base0Z = 32650
+Base0Z = 32700
 XINC = 1 #how many pixels the dots on the UI graph move
 YINC = 1
 
-setpoint = 2.5 #set voltage which corresponds to the desired height we want the cantilever above the sample when scanning
-Tol = 0.1
+MotoStopPoint = 2.5
+MotorStopPointSnap = 2.5 #set voltage which corresponds to the desired height we want the cantilever when we stop the motor
+setpoint = 2.2 #set voltage which corresponds to the desired height we want the cantilever above the sample when scanning
+Tol = 0.01
 CoarseSteps = 0 #Number of steps taken by the coarse Z positioning (keeps track so we retract to the same height as we started)
 
 #setting up the variables for the PID
@@ -252,15 +244,12 @@ VoltageY = Base0
 NegVoltageX = Base0
 NegVoltageY = Base0
 
-zincriment = 0.05 #corresponds to 1.5 degree turn of stepper motor
+zincriment = 0.005 #corresponds to 1.5 degree turn of stepper motor
 xincriment = 1
 yincriment = 1
 
-DAC_COMM(Base0,14) #setting all outputs to zero
-DAC_COMM(Base0,15)
-DAC_COMM(Base0,0)
-DAC_COMM(Base0,1)
-DAC_COMM(Base0,2)
+
+#DAC_COMM(Base0,2)
 
 PIDcontrol = False #Setting the default for the PID control to be off
 sg.theme('Dark Blue 3')
@@ -271,18 +260,23 @@ guy =[[sg.B('Scan',key = '-SCAN-',enable_events = True)],\
     [sg.Button('Exit')],\
     [sg.B('Retract Z Coarse', key = '-RETRACT-', enable_events = True)],\
     [sg.B('Approach Z Coarse', key = '-APPROACH-', enable_events = True)],\
-    #[sg.Text('Current Piezo Position',key = '-CURRENTLABEL-')],\
+    [sg.Text(key = '-CURRENTVOLTAGE-',size = (60,1))],\
     #[sg.Text('Current Coarse Position',key = '-CURRENTLABELCOARSE-')],\
-    [sg.Text(key='info',size=(60,1))],\
+    #[sg.Text(key='info',size=(60,1))],\
     [sg.Text(key = '-CURRENTPOSITION-',size = (60,1))],\
+    [sg.B('Take Cantilever Data',key = '-TAKEDATA-',enable_events = True)],\
+    [sg.Checkbox('Check to Turn on PID feedback',default = False, key = '-STARTPID-')],\
     [sg.B('Return Piezo to Zero',key = '-RETURNZERO-',enable_events = True)],\
-    [sg.B('3D Graph',key = '-3DGRAPH-',enable_events = True),],]
+    [sg.B('3D Graph',key = '-3DGRAPH-',enable_events = True)],\
+    [sg.B('2D Graph',key = '-2DGRAPH-',enable_events = True),]]
 Coarsepositioning=[[sg.B('+X Coarse',key = '-XUPONE-',enable_events = True)],\
     [sg.B('-X Coarse',key = '-XDOWNONE-',enable_events = True)],\
     [sg.B('+Y Coarse',key = '-YUPONE-',enable_events = True)],\
     [sg.B('-Y Coarse',key = '-YDOWNONE-',enable_events = True)],\
-    [sg.B('+Z Coarse',key = '-ZUPONE-',enable_events = True)],\
-    [sg.B('-Z Coarse',key = '-ZDOWNONE-',enable_events = True)],]\
+    [sg.B('+Z Coarse Retract 1 Step',key = '-ZUPONES-',enable_events = True)],\
+    [sg.B('-Z Coarse Approach 1 Step',key = '-ZDOWNONES-',enable_events = True)],\
+    [sg.B('+Z Coarse Large Retract',key = '-ZUPONE-',enable_events = True)],\
+    [sg.B('-Z Coarse Large Approach',key = '-ZDOWNONE-',enable_events = True)],]\
 #Defining the Menu
 menu_def = [['File',['Open','Save','Exit']],\
     ['Edit',['Paste',['Special','Normal',],'Undo'],],\
@@ -298,8 +292,8 @@ Cgraph_bottom_leftY = 1100
 Cgraph_top_rightX = 1000
 Cgraph_top_rightY= 1400
 
-port = sr.Serial("/dev/ttyUSB0", 115200, timeout = 0.5) #Opening serial port to tinyg and setting it to relative movement
-senddatatinyg("g91")
+#port = sr.Serial("/dev/ttyUSB0", 115200, timeout = 0.5) #Opening serial port to tinyg and setting it to relative movement
+#senddatatinyg("g91")
 
 #Defining the main window layout, buttons and inputs that are here are under our graph
 layout = [[sg.Menu(menu_def)],\
@@ -326,7 +320,7 @@ layout = [[sg.Menu(menu_def)],\
     #Defining the Inputs for absolute movement and the outputs for current position and scale
 
 #Creating our main window
-window = sg.Window("Graph Test",layout,size = (1920,1080),finalize=True)
+window = sg.Window("Scanning Probe UI",layout,size = (1920,1080),finalize=True)
 
 #Graph we defined above (sg.graph)
 graph = window['-GRAPH-']
@@ -345,8 +339,118 @@ while True:
     if event == None or event == 'Exit':
         break
     #draw_axis()
+    elif event == '-TAKEDATA-':
+        layout17 = [[sg.T('Select one of the three boxes below to take data')],\
+        [sg.Checkbox('Cant Voltage vs Time', default = False, key = '-CANTVTIME-')],\
+        [sg.Checkbox('Cant Voltage vs PIEZO VOLTAGE', default = False, key = '-CANTVPIEZO-')],\
+        [sg.Checkbox('Cant Voltage vs Z Motor Steps', default = False, key = '-CANTVZMOTOR-')],\
+        [sg.Checkbox('Check to Take Data', default = False, key = '-TAKEIT-')],\
+        [sg.T('Enter Filename without extention below')],\
+        [sg.Input('Dataname', key = '-DATAN-')],\
+        [sg.B('+Z Coarse Retract 1 Step',key = '-ZUPONEDATA-',enable_events = True)],\
+        [sg.B('-Z Coarse Approach 1 Step',key = '-ZDOWNONEDATA-',enable_events = True)],\
+        [sg.B('Clear all Data', key = '-CLEAR-', enable_events = True)],\
+        [sg.Text(key = '-CURRENTVOLTAGEDATA-',size = (60,1))],\
+        [sg.Checkbox('Check to Turn on PID feedback',default = False, key = '-STARTPIDDATA-')],\
+        [sg.B('Save Data to File',key = '-StartDATA-',enable_events = True)],[sg.Exit()]]
+        window17 = sg.Window('Taking Data')
+        window17.layout(layout17)
+        window17.finalize()
+        DataPIEZO = []
+        DataMOTOR = []
+        DataTIME = []
+        DataCANTT = []
+        DataCANTP = []
+        DataCANTM = []
+        StepCount = 0
+        TIME = 0
+        while True:
+            event,values = window17.read(timeout = 10)
+            PiezoCheck = values['-CANTVPIEZO-']
+            TimeCheck = values['-CANTVTIME-']
+            MotorCheck = values['-CANTVZMOTOR-']
+            PIDV = values['-STARTPIDDATA-']
+            takeit = values['-TAKEIT-']
+            if event == None or event == 'Exit':
+                break
+            elif event == '-ZUPONEDATA-':
+                StepCount = StepCount - 1
+                senddatatinyg("g0z{}".format(zincriment))
+                if(MotorCheck and takeit):
+                    DataCANTM.append(CANTVOLTAGE)
+                    DataMOTOR.append(StepCount)
+            elif event == '-ZDOWNONEDATA-':
+                StepCount = StepCount + 1
+                senddatatinyg("g0z{}".format(-zincriment))
+                if(MotorCheck and takeit):
+                    DataCANTM.append(CANTVOLTAGE)
+                    DataMOTOR.append(StepCount)
+            elif event == '-CLEAR-':
+                DataPIEZO.clear()
+                DataMOTOR.clear()
+                DataTIME.clear()
+                DataCANTT.clear()
+                DataCANTP.clear()
+                DataCANTM.clear()
+                TIME = 0
+                StepCount = 0
+            elif event == '-StartDATA-':
+                event,values = window17.read(timeout = 10)
+                DataName = values['-DATAN-']
+                PiezoCheck = values['-CANTVPIEZO-']
+                TimeCheck = values['-CANTVTIME-']
+                MotorCheck = values['-CANTVZMOTOR-']
+                if(TimeCheck):
+                    TotalData = [DataTIME,DataCANTT]
+                elif(MotorCheck):
+                    TotalData = [DataMOTOR,DataCANTM]
+                    StepCount = 0
+                elif(PiezoCheck):
+                    TotalData = [DataTIME,DataPIEZO]
+                print(TotalData)
+                storeData(TotalData,DataName)
+                TotalData.clear()
+                TotalData = []
+
+
+            if(PiezoCheck and takeit):
+                DataCANTP.append(CANTVOLTAGE)
+                DataCANTT.append(CANTVOLTAGE)
+                DataPIEZO.append(VoltageZ)
+                DataTIME.append(TIME)
+                TIME = TIME + 0.1
+            elif(TimeCheck and takeit):
+                    DataCANTT.append(CANTVOLTAGE)
+                    DataTIME.append(TIME)
+                    TIME = TIME + 0.1
+            #elif(MotorCheck):
+                #DataCANTM.append(CANTVOLTAGE)
+                #DataMOTOR.append(StepCount)
+                #DataTIME.append(TIME)
+            while (not((setpoint + Tol) > CANTVOLTAGE > (setpoint - Tol)) and PIDV): #if not within the tolerance we want
+                Change,Difference,PastI = PID(CANTVOLTAGE,Difference,PastI,setpoint) #feed into PID system
+                VoltageZ = VoltageZ + Change
+                DAC_COMM(VoltageZ, 2)
+                CANTVOLTAGE = ADC_COMM_CANT(7)
+                if(PiezoCheck and takeit):
+                    DataCANTP.append(CANTVOLTAGE)
+                    DataCANTT.append(CANTVOLTAGE)
+                    DataPIEZO.append(VoltageZ)
+                    DataTIME.append(TIME)
+                    TIME = TIME + 0.1
+                info = window17['-CURRENTVOLTAGEDATA-']
+                info.update(value = f"Current Cantilever Voltage is ({CANTVOLTAGE})")
+                if ((setpoint + Tol) > CANTVOLTAGE > (setpoint - Tol)):
+                    break
+                event,values = window17.read(timeout = 10)
+                PIDV = values['-STARTPIDDATA-']
+            CANTVOLTAGE = ADC_COMM_CANT(7)
+            info = window17['-CURRENTVOLTAGEDATA-']
+            info.update(value = f"Current Cantilever Voltage is ({CANTVOLTAGE})")
+        window17.close()
     elif event == '-RETURNZERO-':
         layout14 = [[sg.Checkbox('Uncheck to Stop',default = True, key = '-STOPBUTTONBACK-')],\
+        [sg.Text(key = '-CURRENTVOLTAGERETURN-',size = (60,1))],\
         [sg.B('Go',key = '-StartZero-',enable_events = True)],[sg.Exit()]]
         window14 = sg.Window('Return to Zero')
         window14.layout(layout14)
@@ -354,12 +458,14 @@ while True:
         PIDcontrol = False
         while True:
             event,values = window14.read(timeout = 10)
+            CANTVOLTAGE = ADC_COMM_CANT(7)
+            info = window14['-CURRENTVOLTAGERETURN-']
+            info.update(value = f"Current Cantilever Voltage is ({CANTVOLTAGE})")
             if event == None or event == 'Exit':
                 break
             if event == '-StartZero-':
                 #If any of the voltages are not at 0, loop through and change the ones not at zero until they reach zero
                 while (int(VoltageZ) != Base0Z) or (int(VoltageX) != Base0) or (int(VoltageY) != Base0) or (int(NegVoltageX) != Base0) or (int(NegVoltageY) != Base0):
-                    print(VoltageZ)
                     time.sleep(0.01)
                     if (VoltageZ > Base0Z):
                         VoltageZ = VoltageZ - 1
@@ -404,23 +510,86 @@ while True:
             if event == None or event == 'Exit':
                 break
             if event == 'Ok':
-                filename = values['-IN-']   #getting input from the browse buttom or user 
-                fulldata = np.loadtxt(filename) #opening the data file 
+                filename = values['-IN-']   #getting input from the browse buttom or user
+                fulldata = np.loadtxt(filename) #opening the data file
                 datax = fulldata[0] #getting x y and z data
                 #print (datax)
                 datay = fulldata[1]
                 #print (datay)
                 dataz = fulldata[2]
                 #print (dataz)
-                GraphData(datax,datay,dataz)
+                GraphData3D(datax,datay,dataz)
         window5.close()
-
+    elif event == '-2DGRAPH-':
+        #Creating a pop up window that lets the user input the filename they want to store the image as
+        layout18 = [[sg.T('Open data file')],\
+        [sg.Input('',key = '-INTWO-')],\
+        [sg.FileBrowse(target = '-INTWO-')],\
+        [sg.Button('Ok'),sg.Button('Exit')]]
+        window18 = sg.Window('Open 2D Graph'). Layout(layout18)
+        while True:
+            event,values = window18.read(timeout = 10)
+            if event == None or event == 'Exit':
+                break
+            if event == 'Ok':
+                filename = values['-INTWO-']   #getting input from the browse buttom or user
+                fulldata = np.loadtxt(filename) #opening the data file
+                datax = fulldata[0] #getting x y and z data
+                #print (datax)
+                datay = fulldata[1]
+                #print (datay
+                plt.scatter(datax,datay)
+                plt.show()
+        window18.close()
     #Below is events in the x y coarse positioning system
     elif event == '-ZUPONE-':
         #tinyg gets movement as g0x0.01
-        senddatatinyg("g0z{}".format(xincriment))
+        layout15 = [[sg.Checkbox('Uncheck to Stop',default = True, key = '-STOPBUTTONZUP-')],\
+        [sg.Text(key = '-CURRENTVOLTAGEZU-',size = (60,1))],\
+        [sg.B('Go',key = '-StartUp-',enable_events = True)],[sg.Button('Exit')]]
+        window15 = sg.Window('Z Coarse Large Retract')
+        window15.layout(layout15)
+        window15.finalize()
+        PIDcontrol = False
+        while True:
+            event,values = window15.read(timeout = 10)
+            StopCheckZUP = values['-STOPBUTTONZUP-']
+            if event == None or event == 'Exit':
+                break
+            if event == '-StartUp-':
+                while (StopCheckZUP):
+                    senddatatinyg("g0z{}".format(xincriment))
+                    StopCheckZUP = values['-STOPBUTTONZUP-']
+                    event,values = window15.read(timeout = 2500)
+            CANTVOLTAGE = ADC_COMM_CANT(7)
+            info = window15["-CURRENTVOLTAGEZU-"]
+            info.update(value = f"Current Cantilever Voltage is ({CANTVOLTAGE})")
+        window15.close()
     elif event == '-ZDOWNONE-':
-        senddatatinyg("g0z{}".format(-xincriment))
+        layout16 = [[sg.Checkbox('Uncheck to Stop',default = True, key = '-STOPBUTTONZD-')],\
+        [sg.Text(key = '-CURRENTVOLTAGED-',size = (60,1))],\
+        [sg.B('Go',key = '-StartD-',enable_events = True)],[sg.Exit()]]
+        window16 = sg.Window('Z Coarse Large Approac')
+        window16.layout(layout16)
+        window16.finalize()
+        PIDcontrol = False
+        while True:
+            event,values = window16.read(timeout = 10)
+            StopCheckZD = values['-STOPBUTTONZD-']
+            CANTVOLTAGE = ADC_COMM_CANT(7)
+            info = window16["-CURRENTVOLTAGED-"]
+            info.update(value = f"Current Cantilever Voltage is ({CANTVOLTAGE})")
+            if event == None or event == 'Exit':
+                break
+            if event == '-StartD-':
+                while (StopCheckZD):
+                    senddatatinyg("g0z{}".format(-xincriment))
+                    StopCheckZD = values['-STOPBUTTONZD-']
+                    event,values = window16.read(timeout = 2500)
+                    CANTVOLTAGE = ADC_COMM_CANT(7)
+                    info = window16["-CURRENTVOLTAGED-"]
+                    info.update(value = f"Current Cantilever Voltage is ({CANTVOLTAGE})")
+        window16.close()
     elif event == '-XUPONE-':
         senddatatinyg("g0x{}".format(xincriment))
         cgraph.MoveFigure(idcoarse,1,0)
@@ -429,26 +598,34 @@ while True:
         senddatatinyg("g0x{}".format(-xincriment))
         cgraph.MoveFigure(idcoarse,-1,0)
         cgraph.update()
-    elif event == '-YUPONE-':
-        senddatatinyg("g0y{}".format(yincriment))
-        cgraph.MoveFigure(idcoarse,0,1)
-        cgraph.update()
     elif event == '-YDOWNONE-':
         senddatatinyg("g0y{}".format(-yincriment))
         cgraph.MoveFigure(idcoarse,0,-1)
         cgraph.update()
+    elif event == '-YUPONE-':
+        senddatatinyg("g0y{}".format(yincriment))
+        cgraph.MoveFigure(idcoarse,0,1)
+        cgraph.update()
+    elif event == '-ZUPONES-':
+        senddatatinyg("g0z{}".format(zincriment))
+
+    elif event == '-ZDOWNONES-':
+        senddatatinyg("g0z{}".format(-zincriment))
+
     elif event == '-RETRACT-':
         #making the window
         layout4 = [[sg.T('Enter timeout between Z movements in milliseconds below')],\
         [sg.Input('50', key = '-TIMEOUTRET-')],\
         [sg.Checkbox('Uncheck to Stop',default = True, key = '-STOPBUTTONRET-')],\
+        [sg.Text(key = '-CURRENTVOLTAGERET-',size = (60,1))],\
         [sg.B('Go',key = '-StartRet-',enable_events = True)],[sg.Exit()]]
         window4 = sg.Window('Retract Z')
         window4.layout(layout4)
         window4.finalize()
-        PIDcontrol = True
         while True:
             event,values = window4.read(timeout = 10)
+            info = window4["-CURRENTVOLTAGERET-"]
+            info.update(value = f"Current Cantilever Voltage is ({CANTVOLTAGE})")
             if event == None or event == 'Exit':
                 break
             if event == '-StartRet-':
@@ -473,18 +650,33 @@ while True:
                     break
                 else:
                     TimeoutRet = int(TimeoutRet)
-                while(CoarseSteps > 0 and StopCheckRet):
-                    senddatatinyg("g0z{}".format(-zincriment))
-                    time.sleep(3)
+                while(StopCheckRet):
+                    senddatatinyg("g0z{}".format(zincriment))
                     CoarseSteps = CoarseSteps - 1
                     print(CoarseSteps)
+                    event,values = window4.read(timeout = 3000)
+                    CANTVOLTAGE = ADC_COMM_CANT(7)
+                    Set = 100
+                    while ((not((setpoint + Tol) > CANTVOLTAGE > (setpoint - Tol)) or (Set > 0)) and PIDcontrol and StopCheckRet): #if not within the tolerance we want
+                        Change,Difference,PastI = PID(CANTVOLTAGE,Difference,PastI,setpoint) #feed into PID system
+                        VoltageZ = VoltageZ + Change
+                        DAC_COMM(VoltageZ, 2)
+                        CANTVOLTAGE = ADC_COMM_CANT(7)
+                        Set = Set - 1
+                        if ((setpoint + Tol) > CANTVOLTAGE > (setpoint - Tol)):
+                            break
                     event,values = window4.read(timeout = 10)
                     StopCheckRet = values['-STOPBUTTONRET-']
+                    info = window4["-CURRENTVOLTAGERET-"]
+                    info.update(value = f"Current Cantilever Voltage is ({CANTVOLTAGE})")
+            StopCheckRet = values['-STOPBUTTONRET-']
             StopCheckRet = values['-STOPBUTTONRET-']
             CANTVOLTAGE = ADC_COMM_CANT(7)
-            while (not((setpoint + Tol) > CANTVOLTAGE > (setpoint - Tol)) and PIDcontrol): #if not within the tolerance we want
+            while (not((setpoint + Tol) > CANTVOLTAGE > (setpoint - Tol)) and PIDcontrol and StopCheckRet): #if not within the tolerance we want
                 Change,Difference,PastI = PID(CANTVOLTAGE,Difference,PastI,setpoint) #feed into PID system
                 VoltageZ = VoltageZ + Change
+                print("Voltage Z")
+                print(VoltageZ)
                 DAC_COMM(VoltageZ, 2)
                 CANTVOLTAGE = ADC_COMM_CANT(7)
                 if ((setpoint + Tol) > CANTVOLTAGE > (setpoint - Tol)):
@@ -496,6 +688,7 @@ while True:
     elif event == '-APPROACH-':
         layout2 = [[sg.T('Enter timeout between Z movements in milliseconds below')],\
         [sg.Input('50', key = '-TIMEOUTAPP-')],\
+        [sg.Text(key = '-CURRENTVOLTAGEAPP-',size = (60,1))],\
         [sg.Checkbox('Uncheck to Stop',default = True, key = '-STOPBUTTONAPP-')],\
         [sg.B('Go',key = '-StartApp-',enable_events = True)],[sg.Exit()]]
         window2 = sg.Window('Approach Z')
@@ -528,33 +721,38 @@ while True:
                     break
                 else:
                     TimeoutApp = int(TimeoutApp)
-                DAC_COMM(VoltageZ,2) #setting piezotube to normal
+                DAC_COMM(VoltageZ,2) #setting piezotube
                 CANTVOLTAGE = ADC_COMM_CANT(7)
                 if (math.isnan(CANTVOLTAGE)):
                     CANTVOLTAGE = 0
                 #while loop that does the approach, we step in the z direction until we hit the threshold value
-                while (CANTVOLTAGE <= 3 and StopCheckApp): #EXP need to check what noise value we are getting and make sure that it stops at an actual reading not noise
-                    senddatatinyg("g0z{}".format(zincriment))
-                    time.sleep(3)
+                while (CANTVOLTAGE <= MotorStopPointSnap and StopCheckApp): #EXP need to check what noise value we are getting and make sure that it stops at an actual reading not noise
+                    senddatatinyg("g0z{}".format(-zincriment))
                     CANTVOLTAGE = ADC_COMM_CANT(7)
-                    print("Cant Voltage")
-                    print(CANTVOLTAGE)
                     if (math.isnan(CANTVOLTAGE)):
                         CANTVOLTAGE = 0
                     print(CoarseSteps)
                     CoarseSteps = CoarseSteps + 1
-                    event,values = window2.read(timeout = 10)
+                    event,values = window2.read(timeout = 10000)
                     StopCheckApp = values['-STOPBUTTONAPP-']
-                #turning the PID control on
-                PIDcontrol = True
+                    info = window2["-CURRENTVOLTAGEAPP-"]
+                    info.update(value = f"Current Cantilever Voltage is ({CANTVOLTAGE})")
+
+                #PIDcontrol = True
             #PID control takes over and backs the piezotube up to where we want it
             StopCheckApp = values['-STOPBUTTONAPP-']
             CANTVOLTAGE = ADC_COMM_CANT(7)
-            while (not((setpoint + Tol) > CANTVOLTAGE > (setpoint - Tol)) and PIDcontrol): #if not within the tolerance we want
+            info = window2["-CURRENTVOLTAGEAPP-"]
+            info.update(value = f"Current Cantilever Voltage is ({CANTVOLTAGE})")
+            while (not((setpoint + Tol) > CANTVOLTAGE > (setpoint - Tol)) and PIDcontrol and StopCheckApp): #if not within the tolerance we want
                 Change,Difference,PastI = PID(CANTVOLTAGE,Difference,PastI,setpoint) #feed into PID system
                 VoltageZ = VoltageZ + Change
                 DAC_COMM(VoltageZ,2)
+                print("Voltage Z")
+                print(VoltageZ)
                 CANTVOLTAGE = ADC_COMM_CANT(7)
+                info = window2["-CURRENTVOLTAGEAPP-"]
+                info.update(value = f"Current Cantilever Voltage is ({CANTVOLTAGE})")
                 if ((setpoint + Tol) > CANTVOLTAGE > (setpoint - Tol)):
                     break
                 event,values = window2.read(timeout = 10)
@@ -570,7 +768,8 @@ while True:
         [sg.T('Enter Y scanning range in nanometers below')],\
         [sg.Input('1000', key = '-SCANRANGEY-')],\
         [sg.T('Enter Filename without extention below')],\
-        [sg.Input('Dataname', key = '-DATANAME-')],\
+        [sg.Input('Data', key = '-DATANAME-')],\
+        [sg.Text(key = '-CURRENTVOLTAGESCAN-',size = (60,1))],\
         [sg.Checkbox('Uncheck to Stop',default = True, key = '-STOPBUTTON-')],\
         [sg.Button('Ok'),sg.Exit()]]
         window3 = sg.Window('Scan')
@@ -579,6 +778,8 @@ while True:
         PIDcontrol = True
         while True:
             event,values = window3.read(timeout = 10)
+            info = window3['-CURRENTVOLTAGESCAN-']
+            info.update(value = f"Current Cantilever Voltage is ({CANTVOLTAGE})")
             if event == None or event == 'Exit':
                 break
         #Retrieving information user inputs for incriments
@@ -691,12 +892,6 @@ while True:
             #----------------------End Graph Setup------------------------------------
             #Starting of the actual scanning code
             #TODO look into getting the piezotube to start in the bottom left of its range to maximize scanning range
-                VoltageX = 32767 #reading 0 Volts on DAC, this number in binary will be set to DAC to output a corresponding voltage
-                VoltageY = 32767
-            #We set the Z voltage very low because at the end of the coarse positioning approach the piezotube will be at this same value
-
-                Piezomin = 0 #piezomin and max control the min and max values for the Z output since it must stay negative
-                Piezomax = 32767
                 Yrange = 25
                 Xrange = 25 #Determines how many data point we collect (50x50 for example) HIGHLY VARIABLE
                 #arrays that will store position for X,Y, and Z
@@ -713,8 +908,6 @@ while True:
                     CANTVOLTAGE = 0
                 if (not((setpoint + Tol) > CANTVOLTAGE > (setpoint - Tol))): #if not within the tolerance we want
                     while StopCheck: #Piezomin < VoltageZ < Piezomax: #loop unless the Voltage in the Z gets out of range
-                        print("cant Reading")
-                        print(CANTVOLTAGE)
                         Change,Difference,PastI = PID(CANTVOLTAGE,Difference,PastI,setpoint) #feed into PID system
                         VoltageZ = VoltageZ + Change
                         DAC_COMM(VoltageZ, 2)
@@ -722,20 +915,22 @@ while True:
                         if ((setpoint + Tol) > CANTVOLTAGE > (setpoint - Tol)):
                             break
                         event,values = window3.read(timeout = 10)
+                        info = window3['-CURRENTVOLTAGESCAN-']
+                        info.update(value = f"Current Cantilever Voltage is ({CANTVOLTAGE})")
                         StopCheck = values['-STOPBUTTON-']
                 while Yrange > 0 and StopCheck:
                     Xrange = 25
                     XrangeBack = 25
                     while Xrange > 0 and StopCheck:
-                        DistanceX,DistanceY,DistanceZ = CalculateDistances(VoltageX,VoltageY,VoltageZ)
-                        DATAX.append(DistanceX)             #Storing Data into arrays
-                        DATAY.append(DistanceY)
-                        DATAZ.append(DistanceZ)
+                        #DistanceX,DistanceY,DistanceZ = CalculateDistances(VoltageX,VoltageY,VoltageZ)
+                        DATAX.append(VoltageX)             #Storing Data into arrays
+                        DATAY.append(VoltageY)
+                        DATAZ.append(VoltageZ)
                         CurrentX = CurrentX + XINC #purely for the UI graph
                         VoltageX = VoltageX + XSTEP #actual change to the scan
                         CANTVOLTAGE = ADC_COMM_CANT(7) #getting our input from cantilever
-                        print("cant Reading")
-                        print(CANTVOLTAGE)
+                        info = window3['-CURRENTVOLTAGESCAN-']
+                        info.update(value = f"Current Cantilever Voltage is ({CANTVOLTAGE})")
                         #Z FEEDBACK
                         if (not((setpoint + Tol) > CANTVOLTAGE > (setpoint - Tol))): #if not within the tolerance we want
                             while StopCheck: #Piezomin < VoltageZ < Piezomax: #loop unless the Voltage in the Z gets out of range
@@ -746,6 +941,8 @@ while True:
                                 if ((setpoint + Tol) > CANTVOLTAGE > (setpoint - Tol)):
                                     break
                                 event,values = window3.read(timeout = 10)
+                                info = window3['-CURRENTVOLTAGESCAN-']
+                                info.update(value = f"Current Cantilever Voltage is ({CANTVOLTAGE})")
                                 StopCheck = values['-STOPBUTTON-']
                         DAC_COMM(VoltageX,14) #Sending Data to DAC
                         NegVoltageX = GetNegativeVoltage(VoltageX)
@@ -765,8 +962,8 @@ while True:
                         CurrentX = CurrentX - XINC
                         VoltageX = VoltageX - XSTEP
                         CANTVOLTAGE = ADC_COMM_CANT(7)
-                        print("cant Reading")
-                        print(CANTVOLTAGE)
+                        info = window3['-CURRENTVOLTAGESCAN-']
+                        info.update(value = f"Current Cantilever Voltage is ({CANTVOLTAGE})")
                         if (not((setpoint + Tol) > CANTVOLTAGE > (setpoint - Tol))): #if not within the tolerance we want
                             while StopCheck: #Piezomin < VoltageZ < Piezomax: #loop unless the Voltage in the Z gets out of range
                                 Change,Difference,PastI = PID(CANTVOLTAGE,Difference,PastI,setpoint) #feed into PID system
@@ -776,6 +973,8 @@ while True:
                                 if ((setpoint + Tol) > CANTVOLTAGE > (setpoint - Tol)):
                                     break
                                 event,values = window3.read(timeout = 10)
+                                info = window3['-CURRENTVOLTAGESCAN-']
+                                info.update(value = f"Current Cantilever Voltage is ({CANTVOLTAGE})")
                                 StopCheck = values['-STOPBUTTON-']
                         DAC_COMM(VoltageX,14)
                         NegVoltageX = GetNegativeVoltage(VoltageX)
@@ -791,15 +990,15 @@ while True:
                         window.Refresh()
                     CurrentY = CurrentY + YINC
                     VoltageY = VoltageY + YSTEP
-                    DistanceX,DistanceY,DistanceZ = CalculateDistances(VoltageX,VoltageY,VoltageZ)
-                    DATAX.append(DistanceX)             #Storing Data into arrays
-                    DATAY.append(DistanceY)
-                    DATAZ.append(DistanceZ)
+                    #DistanceX,DistanceY,DistanceZ = CalculateDistances(VoltageX,VoltageY,VoltageZ)
+                    DATAX.append(VoltageX)             #Storing Data into arrays
+                    DATAY.append(VoltageY)
+                    DATAZ.append(VoltageZ)
                     event,values = window3.read(timeout = 10)
                     StopCheck = values['-STOPBUTTON-']
                     CANTVOLTAGE = ADC_COMM_CANT(7)
-                    print("cant Reading")
-                    print(CANTVOLTAGE)
+                    info = window3['-CURRENTVOLTAGESCAN-']
+                    info.update(value = f"Current Cantilever Voltage is ({CANTVOLTAGE})")
                     if (not((setpoint + Tol) > CANTVOLTAGE > (setpoint - Tol))): #if not within the tolerance we want
                             while StopCheck: #Piezomin < VoltageZ < Piezomax: #loop unless the Voltage in the Z gets out of range
                                 Change,Difference,PastI = PID(CANTVOLTAGE,Difference,PastI,setpoint) #feed into PID system
@@ -809,6 +1008,8 @@ while True:
                                 if ((setpoint + Tol) > CANTVOLTAGE > (setpoint - Tol)):
                                     break
                                 event,values = window3.read(timeout = 10)
+                                info = window3['-CURRENTVOLTAGESCAN-']
+                                info.update(value = f"Current Cantilever Voltage is ({CANTVOLTAGE})")
                                 StopCheck = values['-STOPBUTTON-']
                     DAC_COMM(VoltageY,0)
                     NegVoltageY = GetNegativeVoltage(VoltageY)
@@ -830,16 +1031,28 @@ while True:
                     DAC_COMM(VoltageZ, 2)
                     CANTVOLTAGE = ADC_COMM_CANT(7)
                     event,values = window3.read(timeout = 10)
+                    info = window3['-CURRENTVOLTAGESCAN-']
+                    info.update(value = f"Current Cantilever Voltage is ({CANTVOLTAGE})")
                     StopCheck = values['-STOPBUTTON-']
         window3.close()
-    while (not((setpoint + Tol) > CANTVOLTAGE > (setpoint - Tol)) and PIDcontrol): #if not within the tolerance we want
+    event,values = window.read(timeout = 10)
+    StartPID = values['-STARTPID-']
+    while (not((setpoint + Tol) > CANTVOLTAGE > (setpoint - Tol)) and StartPID): #if not within the tolerance we want
         Change,Difference,PastI = PID(CANTVOLTAGE,Difference,PastI,setpoint) #feed into PID system
         VoltageZ = VoltageZ + Change
         DAC_COMM(VoltageZ, 2)
+        print(VoltageZ)
         CANTVOLTAGE = ADC_COMM_CANT(7)
+        info = window["-CURRENTVOLTAGE-"]
+        info.update(value = f"Current Cantilever Voltage is ({CANTVOLTAGE})")
         if ((setpoint + Tol) > CANTVOLTAGE > (setpoint - Tol)):
             break
         event,values = window.read(timeout = 10)
+        StartPID = values['-STARTPID-']
+
+    CANTVOLTAGE = ADC_COMM_CANT(7)
+    info = window["-CURRENTVOLTAGE-"]
+    info.update(value = f"Current Cantilever Voltage is ({CANTVOLTAGE})")
 window.close()
 '''
     cgraph.MoveFigure(idcurrent,XINC,0)
