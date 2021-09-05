@@ -150,8 +150,8 @@ def ADC_COMM_CANT(Channel): #Commuication with 0V - 5V inputs from ADC returns i
     #GPIO.output(7,0)
     #time.sleep(2)
     #Recieving 1011 values from ADC and finding the mean to help mitigate error
-    VCant = np.zeros(1001)
-    i = 1000
+    VCant = np.zeros(501)
+    i = 500
     while i > 0:
         ADC_Output = spi.xfer([MUX,MUX])
         LowByte = ADC_Output[1]
@@ -207,9 +207,9 @@ def PID(Reading, DiffOld,PastI,setpoint):
     try:
         #time.sleep(0.1)
         delta_t = 0.1 #Time inbetween steps in the pid
-        Pconst = 350 #constants that need to be developed
+        Pconst = 500 #constants that need to be developed
         Iconst = 0
-        Dconst = 10
+        Dconst = 25
         Diff = setpoint - Reading
         P = Pconst * Diff #proportional component
         I = PastI + Iconst*Diff*delta_t #Integral component
@@ -228,8 +228,8 @@ YINC = 1
 
 MotoStopPoint = 2.5
 MotorStopPointSnap = 2.5 #set voltage which corresponds to the desired height we want the cantilever when we stop the motor
-setpoint = 2.2 #set voltage which corresponds to the desired height we want the cantilever above the sample when scanning
-Tol = 0.01
+setpoint = 2.3 #set voltage which corresponds to the desired height we want the cantilever above the sample when scanning
+Tol = 0.005
 CoarseSteps = 0 #Number of steps taken by the coarse Z positioning (keeps track so we retract to the same height as we started)
 
 #setting up the variables for the PID
@@ -292,8 +292,8 @@ Cgraph_bottom_leftY = 1100
 Cgraph_top_rightX = 1000
 Cgraph_top_rightY= 1400
 
-#port = sr.Serial("/dev/ttyUSB0", 115200, timeout = 0.5) #Opening serial port to tinyg and setting it to relative movement
-#senddatatinyg("g91")
+port = sr.Serial("/dev/ttyUSB0", 115200, timeout = 0.5) #Opening serial port to tinyg and setting it to relative movement
+senddatatinyg("g91")
 
 #Defining the main window layout, buttons and inputs that are here are under our graph
 layout = [[sg.Menu(menu_def)],\
@@ -325,10 +325,10 @@ window = sg.Window("Scanning Probe UI",layout,size = (1920,1080),finalize=True)
 #Graph we defined above (sg.graph)
 graph = window['-GRAPH-']
 #Creating the  Current point as well as storing its id to manipulate them later
-idcurrent = graph.draw_point((450,450),1,'blue')
+idcurrent = graph.draw_point((450,450),5,'blue')
 
 cgraph = window['-CGRAPH-']
-idcoarse = cgraph.draw_point((850,1250),1,'red')
+idcoarse = cgraph.draw_point((850,1250),5,'red')
 #dragging is by default false, making it so that you need an event
 dragging = False
 start_point = end_point = prior_fig = None
@@ -407,7 +407,7 @@ while True:
                     StepCount = 0
                 elif(PiezoCheck):
                     TotalData = [DataTIME,DataPIEZO]
-                print(TotalData)
+
                 storeData(TotalData,DataName)
                 TotalData.clear()
                 TotalData = []
@@ -932,18 +932,23 @@ while True:
                         info = window3['-CURRENTVOLTAGESCAN-']
                         info.update(value = f"Current Cantilever Voltage is ({CANTVOLTAGE})")
                         #Z FEEDBACK
-                        if (not((setpoint + Tol) > CANTVOLTAGE > (setpoint - Tol))): #if not within the tolerance we want
-                            while StopCheck: #Piezomin < VoltageZ < Piezomax: #loop unless the Voltage in the Z gets out of range
-                                Change,Difference,PastI = PID(CANTVOLTAGE,Difference,PastI,setpoint) #feed into PID system
-                                VoltageZ = VoltageZ + Change
-                                DAC_COMM(VoltageZ, 2)
-                                CANTVOLTAGE = ADC_COMM_CANT(7)
-                                if ((setpoint + Tol) > CANTVOLTAGE > (setpoint - Tol)):
-                                    break
-                                event,values = window3.read(timeout = 10)
-                                info = window3['-CURRENTVOLTAGESCAN-']
-                                info.update(value = f"Current Cantilever Voltage is ({CANTVOLTAGE})")
-                                StopCheck = values['-STOPBUTTON-']
+                        ii = 0
+                        while(ii < 10):
+                            if (not((setpoint + Tol) > CANTVOLTAGE > (setpoint - Tol))): #if not within the tolerance we want
+                                while StopCheck: #Piezomin < VoltageZ < Piezomax: #loop unless the Voltage in the Z gets out of range
+                                    Change,Difference,PastI = PID(CANTVOLTAGE,Difference,PastI,setpoint) #feed into PID system
+                                    VoltageZ = VoltageZ + Change
+                                    DAC_COMM(VoltageZ, 2)
+                                    CANTVOLTAGE = ADC_COMM_CANT(7)
+                                    if ((setpoint + Tol) > CANTVOLTAGE > (setpoint - Tol)):
+                                        break
+                                    event,values = window3.read(timeout = 1)
+                                    info = window3['-CURRENTVOLTAGESCAN-']
+                                    info.update(value = f"Current Cantilever Voltage is ({CANTVOLTAGE})")
+                                    StopCheck = values['-STOPBUTTON-']
+                            event,values = window3.read(timeout = 1)
+                            ii = ii + 1
+                            CANTVOLTAGE = ADC_COMM_CANT(7)
                         DAC_COMM(VoltageX,14) #Sending Data to DAC
                         NegVoltageX = GetNegativeVoltage(VoltageX)
                         DAC_COMM(NegVoltageX,15)
@@ -972,7 +977,7 @@ while True:
                                 CANTVOLTAGE = ADC_COMM_CANT(7)
                                 if ((setpoint + Tol) > CANTVOLTAGE > (setpoint - Tol)):
                                     break
-                                event,values = window3.read(timeout = 10)
+                                event,values = window3.read(timeout = 1)
                                 info = window3['-CURRENTVOLTAGESCAN-']
                                 info.update(value = f"Current Cantilever Voltage is ({CANTVOLTAGE})")
                                 StopCheck = values['-STOPBUTTON-']
@@ -999,7 +1004,9 @@ while True:
                     CANTVOLTAGE = ADC_COMM_CANT(7)
                     info = window3['-CURRENTVOLTAGESCAN-']
                     info.update(value = f"Current Cantilever Voltage is ({CANTVOLTAGE})")
-                    if (not((setpoint + Tol) > CANTVOLTAGE > (setpoint - Tol))): #if not within the tolerance we want
+                    jj = 0
+                    while (jj < 10):
+                        if (not((setpoint + Tol) > CANTVOLTAGE > (setpoint - Tol))): #if not within the tolerance we want
                             while StopCheck: #Piezomin < VoltageZ < Piezomax: #loop unless the Voltage in the Z gets out of range
                                 Change,Difference,PastI = PID(CANTVOLTAGE,Difference,PastI,setpoint) #feed into PID system
                                 VoltageZ = VoltageZ + Change
@@ -1007,10 +1014,13 @@ while True:
                                 CANTVOLTAGE = ADC_COMM_CANT(7)
                                 if ((setpoint + Tol) > CANTVOLTAGE > (setpoint - Tol)):
                                     break
-                                event,values = window3.read(timeout = 10)
+                                event,values = window3.read(timeout = 1)
                                 info = window3['-CURRENTVOLTAGESCAN-']
                                 info.update(value = f"Current Cantilever Voltage is ({CANTVOLTAGE})")
                                 StopCheck = values['-STOPBUTTON-']
+                        event,values = window3.read(timeout = 1)
+                        jj = jj + 1
+                        CANTVOLTAGE = ADC_COMM_CANT(7)
                     DAC_COMM(VoltageY,0)
                     NegVoltageY = GetNegativeVoltage(VoltageY)
                     DAC_COMM(NegVoltageY,1)
